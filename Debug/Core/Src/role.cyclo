@@ -1,0 +1,3 @@
+../Core/Src/role.c:16:13:LCD_Config	1
+../Core/Src/role.c:45:6:roleInit	2
+../Core/Src/role.c:77:6:roleNode	10
