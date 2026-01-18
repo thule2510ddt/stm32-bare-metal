@@ -22,7 +22,6 @@
 ../Middlewares/Third_Party/FreeRTOS/Source/tasks.c:2338:7:pcTaskGetName	3
 ../Middlewares/Third_Party/FreeRTOS/Source/tasks.c:2665:12:xTaskIncrementTick	8
 ../Middlewares/Third_Party/FreeRTOS/Source/tasks.c:2174:12:xTaskResumeAll	11
-../Middlewares/Third_Party/FreeRTOS/Source/tasks.c:1249:7:vTaskDelayUntil	10
 ../Middlewares/Third_Party/FreeRTOS/Source/tasks.c:1333:7:vTaskDelay	4
 ../Middlewares/Third_Party/FreeRTOS/Source/tasks.c:2839:7:vTaskSetApplicationTaskTag	2
 ../Middlewares/Third_Party/FreeRTOS/Source/tasks.c:2868:21:xTaskGetApplicationTaskTag	2
