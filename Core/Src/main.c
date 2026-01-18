@@ -22,20 +22,35 @@
 #include "cmsis_os.h"
 #include "fatfs.h"
 #include "usb_host.h"
+#include <stdio.h>
+#include <stdarg.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "role.h"
 #include "string.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "record.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+#define BUTTON_TASK_STACK_SIZE  256
+#define BUTTON_TASK_PRIORITY    (tskIDLE_PRIORITY + 4)
 
+#define STREAM_TASK_STACK_SIZE    512
+#define STREAM_TASK_PRIORITY      (tskIDLE_PRIORITY + 5)
+#define AUDIO_TASK_STACK_SIZE     1024
+
+/* Kích thước data gửi qua UART mỗi lần (bytes) */
+#define STREAM_CHUNK_SIZE         256
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/* Queue sizes */
+static SemaphoreHandle_t xButtonSemaphore = NULL;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -56,9 +71,9 @@ __attribute__((at(0x2004c000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT
 __attribute__((at(0x2004c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
 
 #elif defined ( __GNUC__ ) /* GNU Compiler */
+
 ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
 ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
-
 #endif
 
 ETH_TxPacketConfig TxConfig;
@@ -107,6 +122,40 @@ SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
+/* RTOS Handles */
+typedef enum{
+	BUTTON_EVT_NONE = 0,
+	BUTTON_EVT_AUDIO,
+	BUTTON_EVT_MOTOR,
+	BUTTON_EVT_SERVO,
+	BUTTON_EVT_LIGHT
+}ButtonEvent_t;
+typedef enum {
+    CMD_AUDIO_START,
+    CMD_AUDIO_STOP,
+    CMD_MOTOR_START,
+    CMD_MOTOR_STOP,
+    CMD_SERVO_START,
+    CMD_SERVO_STOP,
+	CMD_LIGHT_START,
+	CMD_LIGHT_STOP
+} SystemCommand_t;
+typedef enum {
+    FUNC_STATE_STOPPED = 0,
+    FUNC_STATE_RUNNING
+} FunctionState_t;
+static FunctionState_t audioState = FUNC_STATE_STOPPED;
+//static FunctionState_t motorState = FUNC_STATE_STOPPED;
+//static FunctionState_t servoState = FUNC_STATE_STOPPED;
+
+#define STREAM_QUEUE_SIZE      4
+#define STREAM_BUFFER_SIZE     (AUDIO_IN_PCM_BUFFER_SIZE / 2)
+
+typedef struct {
+    uint16_t data[STREAM_BUFFER_SIZE];
+    uint16_t size;
+} StreamPacket_t;
+
 
 /* USER CODE END PV */
 
@@ -114,6 +163,7 @@ osThreadId defaultTaskHandle;
 void SystemClock_Config(void);
 void PeriphCommonClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC3_Init(void);
 static void MX_CRC_Init(void);
 static void MX_DCMI_Init(void);
@@ -136,15 +186,136 @@ static void MX_TIM8_Init(void);
 static void MX_TIM12_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
-static void MX_DMA_Init(void);
 void StartDefaultTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
+/* Task function prototypes */
+static TaskHandle_t xButtonManagerTaskHandle = NULL;
+QueueHandle_t xButtonEventQueue;
+QueueHandle_t xSystemCommandQueue;
+QueueHandle_t xStreamQueue;
 
+static TaskHandle_t xStreamTaskHandle = NULL;
+static TaskHandle_t xAudioTaskHandle = NULL;
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	ButtonEvent_t evt = BUTTON_EVT_NONE;
+	if(GPIO_Pin == GPIO_PIN_11){
+		evt = BUTTON_EVT_AUDIO;
+	}
+	if(evt != BUTTON_EVT_NONE){
+		xQueueSendFromISR(xButtonEventQueue, &evt, &xHigherPriorityTaskWoken);
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	}
+}
+static void vButtonManagerTask(void *pvParameters)
+{
+	ButtonEvent_t evt;
+    for (;;) {
+    	 if(xQueueReceive(xButtonEventQueue, &evt, portMAX_DELAY) == pdTRUE){
+    		 switch (evt){
+    		 case BUTTON_EVT_AUDIO:
+    		     if (audioState == FUNC_STATE_STOPPED) {
+    		         audioState = FUNC_STATE_RUNNING;
+    		         SystemCommand_t cmd = CMD_AUDIO_START;
+    		         xQueueSend(xSystemCommandQueue, &cmd, 0);
+    		     } else {
+    		         audioState = FUNC_STATE_STOPPED;
+    		         SystemCommand_t cmd = CMD_AUDIO_STOP;
+    		         xQueueSend(xSystemCommandQueue, &cmd, 0);
+    		     }
+    		     break;
+    		 case BUTTON_EVT_LIGHT:
+    		     break;
+    		 case BUTTON_EVT_MOTOR:
+    		     break;
+    		 case BUTTON_EVT_SERVO:
+    		     break;
+    		 default:
+    			 break;
+    		 }
+    	 }
+    }
+}
+static void vAudioTask(void *arg)
+{
+    SystemCommand_t cmd;
+    uint8_t running = 0;
+
+    HAL_UART_Transmit(&huart6, (uint8_t*)"AudioTask OK\n", 13, 100);
+
+    for (;;) {
+        if (xQueueReceive(xSystemCommandQueue, &cmd, running ? 0 : portMAX_DELAY) == pdTRUE) {
+            switch (cmd) {
+                case CMD_AUDIO_START:
+                    if (!running) {
+                        running = 1;
+                        recordAndStreamStart();
+                        HAL_UART_Transmit(&huart6, (uint8_t*)"START\n", 6, 100);
+                    }
+                    break;
+
+                case CMD_AUDIO_STOP:
+                    if (running) {
+                        recordAndStreamStop();
+                        running = 0;
+                        HAL_UART_Transmit(&huart6, (uint8_t*)"STOP\n", 5, 100);
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        if (running) {
+            AUDIO_ErrorTypeDef err = recordProcess();
+            if (err == AUDIO_ERROR_EOF) {
+                recordAndStreamStop();
+                running = 0;
+                HAL_UART_Transmit(&huart6, (uint8_t*)"EOF\n", 4, 100);
+            }
+        }
+
+        if (running) {
+            vTaskDelay(1);
+        }
+    }
+}
+static void vStreamTask(void *arg)
+{
+    uint32_t ulNotificationValue;
+    uint16_t *pcm_buffer;
+    uint32_t offset;
+
+    HAL_UART_Transmit(&huart6, (uint8_t*)"StreamTask OK\n", 14, 100);
+
+    for (;;) {
+        /* Chờ notification từ DMA callback */
+        if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, portMAX_DELAY) == pdTRUE) {
+
+            /* Lấy pointer đến buffer và offset hiện tại */
+            pcm_buffer = Audio_GetPcmBuffer();
+            offset = Audio_GetCurrentOffset();
+
+            uint8_t *data_ptr = (uint8_t*)&pcm_buffer[offset];
+            uint32_t total_bytes = AUDIO_IN_PCM_BUFFER_SIZE * 2;  // 4096 samples * 2 bytes
+            uint32_t sent = 0;
+
+            while (sent < total_bytes) {
+                uint32_t chunk = (total_bytes - sent > STREAM_CHUNK_SIZE) ?
+                                  STREAM_CHUNK_SIZE : (total_bytes - sent);
+//                HAL_UART_Transmit(&huart6, &data_ptr[sent], chunk, 50);
+                sent += chunk;
+            }
+
+        }
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -154,6 +325,7 @@ void StartDefaultTask(void const * argument);
   */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -170,7 +342,7 @@ int main(void)
   /* Configure the system clock */
   SystemClock_Config();
 
-/* Configure the peripherals common clocks */
+  /* Configure the peripherals common clocks */
   PeriphCommonClock_Config();
 
   /* USER CODE BEGIN SysInit */
@@ -179,6 +351,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC3_Init();
   MX_CRC_Init();
   MX_DCMI_Init();
@@ -202,9 +375,30 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART6_UART_Init();
   MX_FATFS_Init();
-  MX_DMA_Init();
   /* USER CODE BEGIN 2 */
+  xButtonEventQueue = xQueueCreate(8, sizeof(ButtonEvent_t));
+  xSystemCommandQueue = xQueueCreate(8, sizeof(SystemCommand_t));
 
+  /* Tạo tasks */
+  xTaskCreate(vButtonManagerTask, "Button", BUTTON_TASK_STACK_SIZE, NULL,
+              BUTTON_TASK_PRIORITY, &xButtonManagerTaskHandle);
+
+  xTaskCreate(vAudioTask, "Audio", AUDIO_TASK_STACK_SIZE, NULL,
+              tskIDLE_PRIORITY + 4, &xAudioTaskHandle);
+
+  xTaskCreate(vStreamTask, "Stream", STREAM_TASK_STACK_SIZE, NULL,
+              STREAM_TASK_PRIORITY, &xStreamTaskHandle);
+
+  /* QUAN TRỌNG: Set task handle cho record module */
+  Audio_SetStreamTaskHandle(xStreamTaskHandle);
+  Audio_SetRecordTaskHandle(xAudioTaskHandle);
+
+  /* Mount SD card */
+  FRESULT res;
+  res = f_mount(&SDFatFS, (TCHAR const*)SDPath, 0);
+  if(res != FR_OK) {
+      HAL_UART_Transmit(&huart6, (uint8_t*)"SD FAIL\n", 8, 100);
+  }
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -213,6 +407,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
+  xButtonSemaphore = xSemaphoreCreateBinary();
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -236,6 +431,7 @@ int main(void)
   osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -1462,6 +1658,9 @@ static void MX_FMC_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOE_CLK_ENABLE();
@@ -1568,6 +1767,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DCMI_PWR_EN_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : PI11 */
+  GPIO_InitStruct.Pin = GPIO_PIN_11;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOI, &GPIO_InitStruct);
+
   /*Configure GPIO pin : LCD_INT_Pin */
   GPIO_InitStruct.Pin = LCD_INT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
@@ -1619,6 +1824,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
@@ -1634,40 +1846,13 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void const * argument)
 {
+  /* init code for USB_HOST */
   /* USER CODE BEGIN 5 */
 
   /* Infinite loop */
-  FRESULT res;
-  uint32_t byteswritten; /* File write/read counts */
-  uint8_t wtext[] = "STM32 FATFS works great!\n"; /* File write buffer */
-  uint8_t rtext[_MAX_SS];/* File read buffer */
-  if(f_mount(&SDFatFS, (TCHAR const*)SDPath, 0) != FR_OK){
-	  Error_Handler();
-  }
-  if(f_mkfs((TCHAR const*)SDPath, FM_ANY, 0, rtext, sizeof(rtext)) != FR_OK){
-	  Error_Handler();
-  }
-  for(;;)
-  {
-	if(f_open(&SDFile, "waw.txt", FA_OPEN_APPEND | FA_WRITE) != FR_OK)
-	{
-		Error_Handler();
+	for(;;){
+
 	}
-	else
-	{
-		res = f_write(&SDFile, wtext, strlen((char *)wtext), (void *)&byteswritten);
-		if((byteswritten == 0) || (res != FR_OK))
-		{
-			Error_Handler();
-		}
-		else
-		{
-			f_close(&SDFile);
-		}
-	}
-	HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
-	osDelay(10000);
-  }
   /* USER CODE END 5 */
 }
 
@@ -1684,7 +1869,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE BEGIN Callback 0 */
 
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM6) {
+  if (htim->Instance == TIM6)
+  {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
@@ -1706,8 +1892,7 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.

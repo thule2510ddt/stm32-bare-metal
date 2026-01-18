@@ -6,4 +6,4 @@
 ../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_crc.c:339:10:HAL_CRC_Calculate	6
 ../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_crc.c:406:22:HAL_CRC_GetState	1
 ../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_crc.c:432:17:CRC_Handle_8	6
-../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_crc.c:483:17:CRC_Handle_16	3
+../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_crc.c:487:17:CRC_Handle_16	3

@@ -1,0 +1,16 @@
+../Core/Src/record.c:74:17:WavProcess_EncInit.constprop.isra	1
+../Core/Src/record.c:110:6:Audio_SetStreamTaskHandle	1
+../Core/Src/record.c:115:6:Audio_SetRecordTaskHandle	1
+../Core/Src/record.c:120:9:Audio_GetMode	1
+../Core/Src/record.c:126:11:Audio_GetPcmBuffer	1
+../Core/Src/record.c:132:10:Audio_GetCurrentOffset	1
+../Core/Src/record.c:141:20:recordStart	4
+../Core/Src/record.c:175:20:recordProcess	7
+../Core/Src/record.c:212:20:recordStop	4
+../Core/Src/record.c:245:20:streamStart	2
+../Core/Src/record.c:270:20:streamStop	2
+../Core/Src/record.c:291:20:recordAndStreamStart	5
+../Core/Src/record.c:330:20:recordAndStreamStop	1
+../Core/Src/record.c:339:6:BSP_AUDIO_IN_HalfTransfer_CallBack	4
+../Core/Src/record.c:354:6:BSP_AUDIO_IN_TransferComplete_CallBack	4
+../Core/Src/record.c:369:6:BSP_AUDIO_IN_Error_CallBack	1

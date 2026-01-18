@@ -1071,7 +1071,7 @@ void HAL_SAI_RxCpltCallback(SAI_HandleTypeDef *hsai)
   */
 void HAL_SAI_RxHalfCpltCallback(SAI_HandleTypeDef *hsai)
 {
-  /* Manage the remaining file size and new address offset: This function 
+  /* Manage the remaining file size and new address offset: This function
      should be coded by user (its prototype is already declared in stm32746g_discovery_audio.h) */
   BSP_AUDIO_IN_HalfTransfer_CallBack();
 }
