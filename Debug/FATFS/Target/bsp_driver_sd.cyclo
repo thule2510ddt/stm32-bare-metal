@@ -13,4 +13,4 @@
 ../FATFS/Target/bsp_driver_sd.c:268:13:BSP_SD_AbortCallback	1
 ../FATFS/Target/bsp_driver_sd.c:278:13:BSP_SD_WriteCpltCallback	1
 ../FATFS/Target/bsp_driver_sd.c:288:13:BSP_SD_ReadCpltCallback	1
-../FATFS/Target/bsp_driver_sd.c:300:16:BSP_SD_IsDetected	2
+../FATFS/Target/bsp_driver_sd.c:300:16:BSP_SD_IsDetected	1
